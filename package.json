@@ -1,0 +1,29 @@
+{
+  "name": "etapa",
+  "version": "1.0.0",
+  "description": "Etapa – osobní masterclass sportovních partnerství (PWA)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p . && vite build",
+    "preview": "vite preview",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/michalnebomarek/sponsoring.git"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^26.6.6",
+    "markdown-it": "^15.0.3",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
+    "vite-plugin-pwa": "^0.20.5"
+  },
+  "dependencies": {
+    "preact": "^11.2.0"
+  },
+  "type": "module",
+  "private": true
+}
