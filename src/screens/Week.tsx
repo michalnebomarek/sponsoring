@@ -55,7 +55,7 @@ export function WeekScreen({ n }: { n: number }) {
                 <span class="lesson-row-body">
                   <span class="lesson-row-title">{l.title}</span>
                   <span class="lesson-row-meta">
-                    {l.kind === 'task' ? 'Úkol' : `Lekce ${l.n}`} · 30 min{done ? ' · v cíli' : ''}
+                    {l.kind === 'task' ? 'Úkol' : `Lekce ${l.n}`} · ≈ {l.minutes} min{done ? ' · v cíli' : ''}
                   </span>
                 </span>
                 <IconChevron size={20} />

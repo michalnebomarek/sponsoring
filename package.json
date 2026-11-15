@@ -15,7 +15,9 @@
   "license": "ISC",
   "devDependencies": {
     "@preact/preset-vite": "^2.10.6",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.6.6",
+    "js-yaml": "^5.5.0",
     "markdown-it": "^15.0.3",
     "typescript": "^5.9.3",
     "vite": "^5.4.21",

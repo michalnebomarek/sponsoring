@@ -44,7 +44,7 @@ export function Reminder() {
           </li>
           <li>
             Zvol <strong>Nová prázdná automatizace</strong>, přidej akci <strong>Zobrazit oznámení</strong> a
-            napiš do ní třeba „Dnešní lekce čeká. Asi 30 minut.“
+            napiš do ní třeba „Dnešní lekce čeká.“
           </li>
           <li>
             Chceš-li, přidej ještě akci <strong>Otevřít URL</strong> a vlož do ní odkaz níže. Otevře rovnou

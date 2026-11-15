@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { allLessons, lessonById, TOTAL_LESSONS, weekByN, type Lesson } from '../course';
 import { doneCount, setDone, setNote, useStore, weekComplete, getState } from '../store';
+import type { Part } from '../course';
+import { TextAnswer, ExerciseView } from '../components/Exercises';
+import { remainingExercises, cviceni } from '../exlogic';
 import { href, reducedMotion } from '../router';
 import { toast } from '../toast';
 import { CourseProfile } from '../components/CourseProfile';
 import { Jersey } from '../components/Jersey';
-import { IconBack, IconCheck } from '../components/Icons';
+import { IconBack, IconCheck, IconUp } from '../components/Icons';
 import { lekci } from './Today';
 
 /** Tenký ukazatel postupu čtení ve stylu čáry trasy. Mění jen transform. */
@@ -43,61 +46,10 @@ function ReadProgress() {
   );
 }
 
+/** Pole na odpověď ve starém formátu („Na tvoje závody“, otázky úkolu). */
 function NoteField({ id, label }: { id: string; label: string }) {
-  const initial = getState().notes[id]?.text ?? '';
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>(initial ? 'saved' : 'idle');
-  const ta = useRef<HTMLTextAreaElement>(null);
-  const timer = useRef<number | undefined>(undefined);
-
-  const grow = () => {
-    const el = ta.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight + 2}px`;
-  };
-  useLayoutEffect(grow, []);
-
-  const save = () => {
-    clearTimeout(timer.current);
-    if (ta.current) setNote(id, ta.current.value);
-    setStatus(ta.current?.value.trim() ? 'saved' : 'idle');
-  };
-  // uložit i při odchodu ze stránky
-  useEffect(() => {
-    const on = () => save();
-    window.addEventListener('pagehide', on);
-    document.addEventListener('visibilitychange', on);
-    return () => {
-      save();
-      window.removeEventListener('pagehide', on);
-      document.removeEventListener('visibilitychange', on);
-    };
-  }, []);
-
   return (
-    <div class="note">
-      <label class="sr-only" for={`note-${id}`}>
-        {label}
-      </label>
-      <textarea
-        id={`note-${id}`}
-        ref={ta}
-        class="note-input"
-        rows={4}
-        placeholder="Tvoje odpověď…"
-        defaultValue={initial}
-        onInput={() => {
-          grow();
-          setStatus('saving');
-          clearTimeout(timer.current);
-          timer.current = window.setTimeout(save, 500);
-        }}
-        onBlur={save}
-      />
-      <p class="note-status" aria-live="polite">
-        {status === 'saving' ? 'Ukládám…' : status === 'saved' ? 'Uloženo. Najdeš to i v Poznámkách.' : ' '}
-      </p>
-    </div>
+    <TextAnswer id={id} label={label} initial={getState().notes[id]?.text ?? ''} onSave={(t) => setNote(id, t)} />
   );
 }
 
@@ -106,24 +58,110 @@ function Html({ html, class: cls = 'prose' }: { html: string; class?: string }) 
   return <div class={cls} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+/** Obsah složený z textu a cvičení. */
+function Parts({ parts, class: cls = 'prose' }: { parts: Part[]; class?: string }) {
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.t === 'html' ? <Html key={i} html={p.html} class={cls} /> : <ExerciseView key={p.ex.id} ex={p.ex} />,
+      )}
+    </>
+  );
+}
+
+const CHIP_LABEL: Record<string, string> = {
+  vyklad: 'Výklad',
+  pripady: 'Případy',
+  'v-praxi': 'V praxi',
+  'primarni-zdroj': 'Zdroj',
+  cviceni: 'Cvičení',
+  pojmy: 'Pojmy',
+};
+
+function scrollToId(id: string) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
+}
+
+/** Štítky pod nadpisem: skok na sekce, které lekce opravdu má. */
+function SectionChips({ lesson }: { lesson: Lesson }) {
+  const chips = lesson.sections
+    .filter((s) => s.anchor)
+    .map((s) => {
+      let label = CHIP_LABEL[s.anchor!] ?? s.title;
+      if (s.anchor === 'vyklad' && /^teorie/i.test(s.title)) label = 'Teorie';
+      if (s.anchor === 'pripady' && lesson.sections.filter((x) => x.kind === 'case').length === 1) label = 'Případ';
+      return { id: s.anchor!, label };
+    });
+  if (chips.length < 2) return null;
+  return (
+    <nav class="chips" aria-label="Části lekce">
+      {chips.map((c) => (
+        <button key={c.id} class="chip" onClick={() => scrollToId(c.id)}>
+          {c.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+/** Nenápadné tlačítko „nahoru“, když je čtenář hlouběji v lekci. */
+function ToTop() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    let raf = 0;
+    const upd = () => {
+      raf = 0;
+      const typing = document.activeElement instanceof HTMLTextAreaElement || document.activeElement instanceof HTMLInputElement;
+      // u konce lekce by zakrývalo tlačítko „Dojel jsem do cíle“
+      const nearEnd = window.scrollY + window.innerHeight > document.documentElement.scrollHeight - 260;
+      setShow(window.scrollY > 900 && !typing && !nearEnd);
+    };
+    const on = () => {
+      if (!raf) raf = requestAnimationFrame(upd);
+    };
+    window.addEventListener('scroll', on, { passive: true });
+    document.addEventListener('focusin', on);
+    document.addEventListener('focusout', on);
+    return () => {
+      window.removeEventListener('scroll', on);
+      document.removeEventListener('focusin', on);
+      document.removeEventListener('focusout', on);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+  return (
+    <button
+      class={`to-top${show ? ' is-on' : ''}`}
+      aria-label="Nahoru"
+      tabIndex={show ? 0 : -1}
+      onClick={() => window.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' })}
+    >
+      <IconUp size={20} />
+    </button>
+  );
+}
+
 function Sections({ lesson }: { lesson: Lesson }) {
   return (
     <>
       {lesson.sections.map((sec, i) => {
+        const id = sec.anchor;
         if (sec.kind === 'apply') {
           return (
             <section key={i} class="apply" aria-labelledby={`sec-${i}`}>
               <h2 id={`sec-${i}`} class="section-title">
                 {sec.title}
               </h2>
-              <Html html={sec.html} />
+              <Parts parts={sec.parts} />
               <NoteField id={sec.noteId!} label={sec.title} />
             </section>
           );
         }
         if (sec.kind === 'terms') {
           return (
-            <section key={i} class="terms" id="pojmy" aria-labelledby={`sec-${i}`}>
+            <section key={i} class="terms" id={id ?? undefined} aria-labelledby={`sec-${i}`}>
               <h2 id={`sec-${i}`} class="section-title">
                 {sec.title}
               </h2>
@@ -137,16 +175,16 @@ function Sections({ lesson }: { lesson: Lesson }) {
                   ))}
                 </dl>
               )}
-              <Html html={sec.html} />
+              <Parts parts={sec.parts} />
             </section>
           );
         }
         return (
-          <section key={i} class={`sec sec--${sec.kind}`} aria-labelledby={`sec-${i}`}>
+          <section key={i} class={`sec sec--${sec.kind}`} id={id ?? undefined} aria-labelledby={`sec-${i}`}>
             <h2 id={`sec-${i}`} class="section-title">
               {sec.title}
             </h2>
-            <Html html={sec.html} />
+            <Parts parts={sec.parts} />
           </section>
         );
       })}
@@ -218,6 +256,7 @@ function Finish({ lesson }: { lesson: Lesson }) {
   const idx = allLessons.findIndex((l) => l.id === lesson.id);
   const next = allLessons[idx + 1];
   const weekDone = weekComplete(lesson.week, s);
+  const left = remainingExercises(lesson, s);
 
   const finish = () => {
     const wasComplete = weekComplete(lesson.week);
@@ -261,9 +300,12 @@ function Finish({ lesson }: { lesson: Lesson }) {
           </div>
         </>
       ) : (
+        <>
+          {left > 0 && <p class="finish-left">{cviceni(left)}. Dokončit lekci můžeš i tak.</p>}
         <button class="btn btn--primary btn--big" onClick={finish}>
           Dojel jsem do cíle
         </button>
+        </>
       )}
     </section>
   );
@@ -302,17 +344,19 @@ export function LessonScreen({ id, anchor }: { id: string; anchor?: string }) {
           <IconBack />
         </a>
         <span class="eyebrow">
-          Etapa {week.n} · {lesson.kind === 'task' ? 'Úkol' : `Lekce ${lesson.n}`} · 30 min
+          Etapa {week.n} · {lesson.kind === 'task' ? 'Úkol' : `Lekce ${lesson.n}`} · ≈ {lesson.minutes} min
         </span>
         <span class="navbar-end" />
       </header>
       <article class="lesson-body">
         <h1 class="lesson-title">{lesson.title}</h1>
-        <Html html={lesson.leadHtml} class="prose lead" />
+        <SectionChips lesson={lesson} />
+        <Parts parts={lesson.leadParts} class={lesson.sections.length ? 'prose lead' : 'prose'} />
         {lesson.task ? <Task lesson={lesson} /> : <Sections lesson={lesson} />}
         <Sources lesson={lesson} />
       </article>
       <Finish lesson={lesson} />
+      <ToTop />
     </div>
   );
 }
