@@ -1,6 +1,6 @@
 # Etapa
 
-Osobní masterclass sportovních partnerství: 8 týdnů po 5 lekcích, 30 minut denně.
+Osobní masterclass sportovních partnerství: 8 týdnů po 5 lekcích, s interaktivními cvičeními.
 Webová aplikace (PWA), kterou si přidáš na plochu iPhonu. Funguje offline, data zůstávají jen v telefonu.
 
 Adresa: **https://michalnebomarek.github.io/sponsoring/**
@@ -17,33 +17,69 @@ Na kód se při tom sahat nemusí.
 
 ### Struktura souboru
 
-```markdown
+````markdown
 # Týden 2 – Název týdne
 
 ## Jak s lekcemi pracovat
 Úvod týdne (zobrazí se jako úvodní karta, nepočítá se jako lekce).
 
 ## Lekce 1 – Název
-Úvodní věta lekce.
+Úvodní odstavec lekce.
 
-### Teorie
-### Případ: Název           ← může jich být víc (Případ 1, Případ 2 …)
-### Na tvoje závody         ← pod touto sekcí je pole na odpověď
+### Výklad
+#### Podnadpis
+Text…
+
+### Případ 1: Název          ← jeden nebo dva případy
+### Primární zdroj (10 minut) ← volitelné
+### Cvičení
+```cviceni
+typ: volba
+id: t2-l1-c1
+otazka: …
+```
 ### Pojmy
 - **Pojem** – vysvětlení    ← jde do Slovníčku
 
-## Lekce 5 – Úkol
-Číslovaný seznam, kde každá položka začíná **tučným názvem**,
-dostane u každé položky vlastní pole na odpověď.
+## Lekce 5 – Název
+Úvodní odstavce a jeden blok cviceni (obvykle typ kroky).
 
 ## Literatura k týdnu
-Zdroje, zobrazí se na konci týdne.
-```
+````
+
+Pod nadpisem lekce se zobrazí štítky (Výklad, Případy, Primární zdroj, Cvičení, Pojmy), ale jen pro sekce, které lekce má. Starý formát (`### Teorie`, `### Na tvoje závody`) funguje dál.
+
+### Cvičení
+
+Každé cvičení je blok ```` ```cviceni ```` s obsahem v YAML. Pět typů:
+
+| typ | co dělá | povinná pole |
+|---|---|---|
+| `rozrad` | třídění položek do kategorií | `zadani`, `kategorie`, `polozky` (každá `text`, `spravne`, volitelně `vysvetleni`) |
+| `volba` | výběr jedné odpovědi | `otazka`, `moznosti` (každá `text`, `spravne: true/false`, volitelně `vysvetleni`) |
+| `skala` | hodnocení 1–5 | `zadani`, `polozky`, volitelně `min_popis`, `max_popis` |
+| `odpoved` | krátký text | `zadani`, volitelně `napoveda` |
+| `kroky` | průvodce po krocích | `nazev`, `kroky` (každý `otazka`, `typ: text` s `napoveda` nebo `typ: volba` s `moznosti`) |
+
+Pravidla:
+
+- **`id` musí být jedinečné v celém kurzu** a neměnit se, např. `t2-l3-c1` (týden 2, lekce 3, cvičení 1). Odpovědi se ukládají pod `id`, takže úprava textu cvičení odpovědi nesmaže. Změna `id` ano.
+- Odsazení je důležité: položky seznamu začínají pomlčkou a jejich pole jsou odsazená o dvě mezery víc (viz `content/tyden-1.md`).
+- Dvojtečka uvnitř textu („limity: jeden turnaj“) nevadí, aplikace si ji ohlídá.
+- Když je blok rozbitý (chybí `id` nebo `typ`, neznámý typ, `spravne` neodpovídá žádné kategorii, krok typu `volba` nemá `moznosti`, dvě cvičení se stejným `id`…), **build se zastaví**. Na záložce Actions bude červený křížek s hláškou typu:
+  `Chyba ve cvičení: content/tyden-2.md › Lekce 2 › t2-l2-c3: chybí pole „zadani“.`
+  Online zůstane předchozí funkční verze.
+
+### Odhad času
+
+Aplikace ho počítá sama: slova ve Výkladu, Případech a Primárním zdroji děleno 180, plus 2 minuty za každé cvičení `volba`, `rozrad` a `skala`, 4 minuty za `odpoved` a 10 minut za `kroky`. Výsledek se zaokrouhlí na 5 minut.
+
+### Další pravidla
 
 - Odkazy piš běžně: `[text](https://…)`. V aplikaci se z nich stanou odkazy otevírané v Chromu a sesbírají se do „Zdrojů této lekce“.
 - Drobné odchylky nevadí. Chybějící sekce nebo sekce s jiným názvem se zobrazí jako obyčejný text.
 - Postup se ukládá podle čísla týdne a lekce (`t2-l3`). Úprava textu lekce proto postup nesmaže. Přečíslování lekcí ale ano.
-- Build zkontroluje, že se neztratil žádný odkaz. Když se něco nepovede, na záložce Actions bude červený křížek a online zůstane předchozí verze.
+- Build zkontroluje, že se neztratil žádný odkaz.
 
 ## Nasazení (jednorázově)
 
@@ -73,7 +109,9 @@ npm run dev
 npm run build
 ```
 
-- `build/content.ts` – parser Markdownu (běží při buildu, výsledek jde do aplikace jako JSON).
+- `build/content.ts` – parser Markdownu a bloků `cviceni` (běží při buildu, výsledek jde do aplikace jako JSON).
+- `node scripts/inspect.ts` – vypíše strukturu kurzu: sekce, cvičení a odhad času každé lekce.
+- `src/components/Exercises.tsx` – cvičení, `src/exlogic.ts` – jejich vyhodnocení.
 - `src/` – aplikace (Preact + TypeScript), `src/styles.css` – barvy jako CSS proměnné nahoře v souboru.
 - `src/fonts/` – Fraunces a Figtree (licence SIL OFL), hostované lokálně kvůli offline režimu.
 - `npm run icons` – znovu vygeneruje ikony v `public/` (potřebuje Playwright).

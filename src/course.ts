@@ -1,7 +1,22 @@
 import courseData from 'virtual:course';
 import type { Course, Lesson, Week, Term } from '../build/content.ts';
 
-export type { Course, Lesson, Week, Term, Section, Prompt, SourceLink } from '../build/content.ts';
+export type {
+  Course,
+  Lesson,
+  Week,
+  Term,
+  Section,
+  Prompt,
+  SourceLink,
+  Part,
+  Exercise,
+  ExRozrad,
+  ExVolba,
+  ExSkala,
+  ExOdpoved,
+  ExKroky,
+} from '../build/content.ts';
 
 export const course: Course = courseData;
 export const LESSONS_PER_WEEK = 5;
@@ -39,5 +54,9 @@ export function noteFields(l: Lesson): { id: string; label: string; questionHtml
   if (l.task) return l.task.prompts.map((p, i) => ({ id: p.id, label: `${i + 1}. ${p.title}`, questionHtml: p.html }));
   return l.sections
     .filter((s) => s.kind === 'apply' && s.noteId)
-    .map((s) => ({ id: s.noteId!, label: s.title, questionHtml: s.html }));
+    .map((s) => ({
+      id: s.noteId!,
+      label: s.title,
+      questionHtml: s.parts.map((p) => (p.t === 'html' ? p.html : '')).join(''),
+    }));
 }

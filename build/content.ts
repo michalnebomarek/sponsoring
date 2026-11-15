@@ -4,21 +4,56 @@
  *
  * Parser je záměrně tolerantní: chybějící nebo navíc přidané podsekce
  * nevyhodí chybu, jen se zobrazí jako obecný blok textu.
- * Jedinou tvrdou kontrolou je počet odkazů – žádný se nesmí ztratit.
+ * Tvrdé kontroly (build selže) jsou dvě:
+ *  - počet odkazů – žádný se nesmí ztratit,
+ *  - bloky ```cviceni – musí mít platnou strukturu a jedinečné id.
  */
 import MarkdownIt from 'markdown-it';
+import { load as yamlLoad } from 'js-yaml';
 import type { Token } from 'markdown-it';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type SourceLink = { href: string; text: string; domain: string };
 
-export type SectionKind = 'theory' | 'case' | 'apply' | 'terms' | 'other';
+export type SectionKind = 'theory' | 'case' | 'primary' | 'exercises' | 'apply' | 'terms' | 'other';
+
+// ——— cvičení ———
+export type ExRozrad = {
+  typ: 'rozrad';
+  id: string;
+  zadani: string;
+  kategorie: string[];
+  polozky: { text: string; spravne: string; vysvetleni: string }[];
+};
+export type ExVolba = {
+  typ: 'volba';
+  id: string;
+  otazka: string;
+  moznosti: { text: string; spravne: boolean; vysvetleni: string }[];
+};
+export type ExSkala = {
+  typ: 'skala';
+  id: string;
+  zadani: string;
+  min_popis: string;
+  max_popis: string;
+  polozky: string[];
+};
+export type ExOdpoved = { typ: 'odpoved'; id: string; zadani: string; napoveda: string };
+export type ExKrok = { otazka: string; typ: 'text' | 'volba'; napoveda: string; moznosti: string[] };
+export type ExKroky = { typ: 'kroky'; id: string; nazev: string; kroky: ExKrok[] };
+export type Exercise = ExRozrad | ExVolba | ExSkala | ExOdpoved | ExKroky;
+
+/** Kus obsahu: buď vykreslený Markdown, nebo cvičení. */
+export type Part = { t: 'html'; html: string } | { t: 'ex'; ex: Exercise };
 
 export type Section = {
   kind: SectionKind;
   title: string;
-  html: string;
+  /** kotva pro navigační štítky (vyklad, pripady, …) */
+  anchor?: string;
+  parts: Part[];
   /** Jen u kind === 'apply': klíč, pod kterým se ukládá odpověď. */
   noteId?: string;
 };
@@ -33,7 +68,11 @@ export type Lesson = {
   n: number;
   title: string;
   kind: 'lesson' | 'task';
-  leadHtml: string;
+  /** odhad času v minutách (zaokrouhleno na 5) */
+  minutes: number;
+  leadParts: Part[];
+  /** všechna cvičení lekce v pořadí */
+  exercises: Exercise[];
   sections: Section[];
   /** Jen u úkolu: text před seznamem otázek, otázky s polem na odpověď, text po nich. */
   task?: { beforeHtml: string; prompts: Prompt[]; afterHtml: string };
@@ -110,11 +149,205 @@ function collectLinks(tokens: Token[], out: SourceLink[]) {
   }
 }
 
-function render(src: string, links: SourceLink[]): string {
+// ——— kontext pro srozumitelné chybové hlášky ———
+let where = { file: '', lesson: '' };
+let usedIds = new Map<string, string>();
+
+class ContentError extends Error {}
+
+function fail(id: string, msg: string): never {
+  const at = [where.file, where.lesson, id].filter(Boolean).join(' › ');
+  throw new ContentError(`Chyba ve cvičení: ${at}: ${msg}`);
+}
+
+function text(o: Record<string, unknown>, key: string, id: string, label = key, optional = false): string {
+  const v = o[key];
+  if (v === undefined || v === null || v === '') {
+    if (optional) return '';
+    fail(id, `chybí pole „${label}“.`);
+  }
+  if (typeof v === 'string' || typeof v === 'number') return String(v).trim();
+  fail(id, `pole „${label}“ má být text.`);
+}
+
+function list(o: Record<string, unknown>, key: string, id: string, min = 1): unknown[] {
+  const v = o[key];
+  if (v === undefined || v === null) fail(id, `chybí seznam „${key}“.`);
+  if (!Array.isArray(v)) fail(id, `„${key}“ má být seznam (položky začínající pomlčkou nebo [a, b]).`);
+  if (v.length < min) fail(id, `„${key}“ musí mít aspoň ${min} ${min === 1 ? 'položku' : 'položky'}.`);
+  return v;
+}
+
+function obj(v: unknown, id: string, label: string): Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) fail(id, `${label} má mít tvar „klíč: hodnota“.`);
+  return v as Record<string, unknown>;
+}
+
+const TYPES = ['rozrad', 'volba', 'skala', 'odpoved', 'kroky'] as const;
+
+const TEXT_KEYS = 'text|vysvetleni|zadani|otazka|napoveda|nazev|min_popis|max_popis|spravne';
+
+/**
+ * V českém textu bývá dvojtečka („limity: jeden turnaj“), kterou by YAML
+ * považoval za nový klíč. U textových polí proto hodnotu bez uvozovek
+ * automaticky obalíme uvozovkami. Struktura se tím nemění.
+ */
+export function quoteTextValues(src: string): string {
+  const re = new RegExp(`^(\\s*(?:-\\s+)?(?:${TEXT_KEYS}):[ \\t]+)(.*?)\\s*$`);
+  return src
+    .split(/\r?\n/)
+    .map((line) => {
+      const m = line.match(re);
+      if (!m) return line;
+      const v = m[2];
+      if (!v || /^["'[{|>&*!]/.test(v) || /^(true|false)$/.test(v)) return line;
+      if (!/:\s|\s#/.test(v)) return line;
+      return `${m[1]}"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    })
+    .join('\n');
+}
+
+/** Načte a zkontroluje jeden blok ```cviceni. */
+export function parseExercise(src: string): Exercise {
+  let data: unknown;
+  try {
+    data = yamlLoad(quoteTextValues(src));
+  } catch (e) {
+    const m = (e as { reason?: string; mark?: { line: number } });
+    fail('', `blok není platný YAML (${m.reason ?? String(e)}${m.mark ? `, řádek ${m.mark.line + 1} bloku` : ''}).`);
+  }
+  const o = obj(data, '', 'Blok cvičení');
+  const id = o.id === undefined || o.id === null ? '' : String(o.id).trim();
+  if (!id) fail('', `blok nemá „id“ (typ: ${o.typ ?? '?'}). Každé cvičení potřebuje stabilní id, např. t1-l2-c3.`);
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(id)) fail(id, 'id smí obsahovat jen písmena bez diakritiky, číslice a pomlčky.');
+  if (!o.typ) fail(id, `chybí „typ“. Povolené typy: ${TYPES.join(', ')}.`);
+  if (!TYPES.includes(o.typ as (typeof TYPES)[number])) fail(id, `neznámý typ „${o.typ}“. Povolené typy: ${TYPES.join(', ')}.`);
+  const typ = o.typ as Exercise['typ'];
+  const prev = usedIds.get(id);
+  if (prev) fail(id, `id už používá jiné cvičení (${prev}). Id musí být jedinečné v celém kurzu.`);
+  const ex = validate(o, typ, id);
+  usedIds.set(id, [where.file, where.lesson].filter(Boolean).join(' › '));
+  return ex;
+}
+
+function validate(o: Record<string, unknown>, typ: Exercise['typ'], id: string): Exercise {
+  switch (typ) {
+    case 'rozrad': {
+      const kategorie = list(o, 'kategorie', id, 2).map((k, i) => {
+        if (typeof k !== 'string' && typeof k !== 'number') fail(id, `kategorie ${i + 1} má být text.`);
+        return String(k).trim();
+      });
+      const polozky = list(o, 'polozky', id).map((p, i) => {
+        const po = obj(p, id, `Položka ${i + 1}`);
+        const spravne = text(po, 'spravne', id, `polozky[${i + 1}].spravne`);
+        if (!kategorie.includes(spravne)) {
+          fail(id, `položka ${i + 1} („${po.text}“) má „spravne: ${spravne}“, ale taková kategorie není. Kategorie: ${kategorie.join(', ')}.`);
+        }
+        return {
+          text: text(po, 'text', id, `polozky[${i + 1}].text`),
+          spravne,
+          vysvetleni: text(po, 'vysvetleni', id, `polozky[${i + 1}].vysvetleni`, true),
+        };
+      });
+      return { typ, id, zadani: text(o, 'zadani', id), kategorie, polozky };
+    }
+    case 'volba': {
+      const moznosti = list(o, 'moznosti', id, 2).map((p, i) => {
+        const po = obj(p, id, `Možnost ${i + 1}`);
+        if (po.spravne !== undefined && typeof po.spravne !== 'boolean') {
+          fail(id, `možnost ${i + 1}: „spravne“ má být true nebo false.`);
+        }
+        return {
+          text: text(po, 'text', id, `moznosti[${i + 1}].text`),
+          spravne: po.spravne === true,
+          vysvetleni: text(po, 'vysvetleni', id, `moznosti[${i + 1}].vysvetleni`, true),
+        };
+      });
+      if (!moznosti.some((m) => m.spravne)) fail(id, 'žádná možnost nemá „spravne: true“.');
+      return { typ, id, otazka: text(o, 'otazka', id), moznosti };
+    }
+    case 'skala': {
+      const polozky = list(o, 'polozky', id).map((p, i) => {
+        if (typeof p !== 'string' && typeof p !== 'number') fail(id, `položka ${i + 1} má být text.`);
+        return String(p).trim();
+      });
+      if (new Set(polozky).size !== polozky.length) fail(id, 'položky se opakují.');
+      return {
+        typ,
+        id,
+        zadani: text(o, 'zadani', id),
+        min_popis: text(o, 'min_popis', id, 'min_popis', true),
+        max_popis: text(o, 'max_popis', id, 'max_popis', true),
+        polozky,
+      };
+    }
+    case 'odpoved':
+      return { typ, id, zadani: text(o, 'zadani', id), napoveda: text(o, 'napoveda', id, 'napoveda', true) };
+    case 'kroky': {
+      const kroky = list(o, 'kroky', id).map((k, i): ExKrok => {
+        const ko = obj(k, id, `Krok ${i + 1}`);
+        const kt = ko.typ ?? 'text';
+        if (kt !== 'text' && kt !== 'volba') fail(id, `krok ${i + 1} má typ „${kt}“. Povolené: text, volba.`);
+        let moznosti: string[] = [];
+        if (kt === 'volba') {
+          if (!Array.isArray(ko.moznosti) || ko.moznosti.length < 2) {
+            fail(id, `krok ${i + 1} má typ „volba“, ale chybí mu „moznosti“ (aspoň dvě).`);
+          }
+          moznosti = ko.moznosti.map((m) => String(m).trim());
+        }
+        return {
+          otazka: text(ko, 'otazka', id, `kroky[${i + 1}].otazka`),
+          typ: kt,
+          napoveda: text(ko, 'napoveda', id, `kroky[${i + 1}].napoveda`, true),
+          moznosti,
+        };
+      });
+      return { typ, id, nazev: text(o, 'nazev', id), kroky };
+    }
+  }
+  fail(id, 'neznámá chyba.');
+}
+
+/** Vykreslí Markdown a bloky ```cviceni vrátí jako samostatné díly. */
+function renderParts(src: string, links: SourceLink[], exercises: Exercise[] | null): Part[] {
   const tokens = md.parse(src, {});
   collectLinks(tokens, links);
-  return md.renderer.render(tokens, md.options, {});
+  const parts: Part[] = [];
+  let buf: Token[] = [];
+  const flush = () => {
+    const html = md.renderer.render(buf, md.options, {}).trim();
+    if (html) parts.push({ t: 'html', html });
+    buf = [];
+  };
+  for (const t of tokens) {
+    if (t.type === 'fence' && t.info.trim().toLowerCase() === 'cviceni') {
+      if (!exercises) {
+        throw new ContentError(`Chyba ve cvičení: ${where.file} › ${where.lesson || 'mimo lekce'}: blok cviceni může být jen uvnitř lekce.`);
+      }
+      flush();
+      const ex = parseExercise(t.content);
+      exercises.push(ex);
+      parts.push({ t: 'ex', ex });
+    } else buf.push(t);
+  }
+  flush();
+  return parts;
 }
+
+/** Počet slov čitelného textu (bez bloků kódu a cvičení). */
+export function wordCount(src: string): number {
+  let n = 0;
+  for (const t of md.parse(src, {})) {
+    if (t.type !== 'inline' || !t.children) continue;
+    for (const c of t.children) {
+      if (c.type === 'text' || c.type === 'code_inline') n += c.content.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+    }
+  }
+  return n;
+}
+
+const EX_MINUTES: Record<Exercise['typ'], number> = { volba: 2, rozrad: 2, skala: 2, odpoved: 4, kroky: 10 };
+export const READING_WPM = 180;
 
 function renderInline(src: string, links: SourceLink[]): string {
   const tokens = md.parseInline(src, {});
@@ -147,8 +380,10 @@ function splitBy(src: string, level: 2 | 3): { lead: string; blocks: Block[] } {
 
 function sectionKind(title: string): SectionKind {
   const t = title.toLowerCase();
-  if (t.startsWith('teorie')) return 'theory';
+  if (t.startsWith('teorie') || t.startsWith('výklad') || t.startsWith('vyklad')) return 'theory';
   if (t.startsWith('případ') || t.startsWith('pripad') || t.startsWith('case')) return 'case';
+  if (t.startsWith('primární') || t.startsWith('primarni')) return 'primary';
+  if (t.startsWith('cvičení') || t.startsWith('cviceni')) return 'exercises';
   if (t.startsWith('na tvoje') || t.startsWith('na tvé') || t.startsWith('na tve')) return 'apply';
   if (t.startsWith('pojmy') || t.startsWith('slovníček')) return 'terms';
   return 'other';
@@ -220,26 +455,44 @@ function parseTask(src: string, lessonId: string, links: SourceLink[]): Lesson['
   };
 }
 
+const ANCHORS: Partial<Record<SectionKind, string>> = {
+  theory: 'vyklad',
+  case: 'pripady',
+  primary: 'primarni-zdroj',
+  exercises: 'cviceni',
+  terms: 'pojmy',
+};
+
 function parseLesson(week: number, n: number, title: string, body: string): { lesson: Lesson; linkCount: number } {
   const id = `t${week}-l${n}`;
+  where.lesson = `Lekce ${n}`;
   const { lead, blocks } = splitBy(body, 3);
   const links: SourceLink[] = [];
   const sections: Section[] = [];
   const terms: Term[] = [];
-  let leadHtml = '';
+  const exercises: Exercise[] = [];
+  let leadParts: Part[] = [];
   let task: Lesson['task'];
+  let words = 0;
+  let extraMinutes = 0;
 
   if (!blocks.length) {
-    // lekce bez podsekcí – může to být úkol
+    // lekce bez podsekcí – úkol (starý formát s číslovaným seznamem otázek, nebo úvod + cvičení)
     const taskLinks: SourceLink[] = [];
-    task = parseTask(lead, id, taskLinks);
-    if (task) links.push(...taskLinks);
-    else leadHtml = render(lead, links);
+    task = lead.includes('```cviceni') ? undefined : parseTask(lead, id, taskLinks);
+    if (task) {
+      links.push(...taskLinks);
+      extraMinutes += 4 * task.prompts.length;
+    } else leadParts = renderParts(lead, links, exercises);
   } else {
-    leadHtml = render(lead, links);
+    leadParts = renderParts(lead, links, exercises);
     let applyCount = 0;
+    const anchored = new Set<string>();
     for (const b of blocks) {
       const kind = sectionKind(b.title);
+      const anchor = ANCHORS[kind] && !anchored.has(ANCHORS[kind]!) ? ANCHORS[kind] : undefined;
+      if (anchor) anchored.add(anchor);
+      if (kind === 'theory' || kind === 'case' || kind === 'primary') words += wordCount(b.body);
       if (kind === 'terms') {
         const sectionLinks: SourceLink[] = [];
         const parsed = parseTerms(b.body, id, sectionLinks);
@@ -252,18 +505,23 @@ function parseLesson(week: number, n: number, title: string, body: string): { le
             .filter((l) => !/^\s*[-*+]\s+\*\*/.test(l))
             .join('\n')
             .trim();
-          sections.push({ kind, title: b.title, html: rest ? render(rest, links) : '' });
+          sections.push({ kind, title: b.title, anchor, parts: rest ? renderParts(rest, links, exercises) : [] });
           continue;
         }
       }
-      const section: Section = { kind, title: b.title, html: render(b.body, links) };
+      const section: Section = { kind, title: b.title, anchor, parts: renderParts(b.body, links, exercises) };
       if (kind === 'apply') {
         applyCount++;
         section.noteId = applyCount === 1 ? id : `${id}-${applyCount}`;
+        extraMinutes += 4;
       }
       sections.push(section);
     }
   }
+
+  // Odhad času: slova výkladu, případů a primárního zdroje / 180 + minuty za cvičení.
+  const raw = words / READING_WPM + extraMinutes + exercises.reduce((m, e) => m + EX_MINUTES[e.typ], 0);
+  const minutes = Math.max(5, Math.round(raw / 5) * 5);
 
   const hasApply = sections.some((s) => s.kind === 'apply');
   const lesson: Lesson = {
@@ -271,13 +529,16 @@ function parseLesson(week: number, n: number, title: string, body: string): { le
     week,
     n,
     title,
-    kind: task && !hasApply ? 'task' : 'lesson',
-    leadHtml,
+    kind: !blocks.length && (task || exercises.length) && !hasApply ? 'task' : 'lesson',
+    minutes,
+    leadParts,
+    exercises,
     sections,
     task,
     terms,
     links: dedupe(links),
   };
+  where.lesson = '';
   return { lesson, linkCount: links.length };
 }
 
@@ -294,7 +555,8 @@ export function countRawLinks(src: string): number {
   return all.length;
 }
 
-export function parseWeek(src: string, fileWeek: number, warn: (m: string) => void = () => {}): Week {
+export function parseWeek(src: string, fileWeek: number, warn: (m: string) => void = () => {}, file = `content/tyden-${fileWeek}.md`): Week {
+  where = { file, lesson: '' };
   const h1 = src.match(new RegExp(`^#\\s+(?:Týden|Tyden)\\s+(\\d+)\\s*(?:${DASH}\\s*(.*))?$`, 'mi'));
   const n = h1 ? Number(h1[1]) : fileWeek;
   if (h1 && n !== fileWeek) warn(`tyden-${fileWeek}.md: nadpis říká „Týden ${n}“, beru číslo z nadpisu.`);
@@ -314,15 +576,16 @@ export function parseWeek(src: string, fileWeek: number, warn: (m: string) => vo
   };
   const sink: SourceLink[] = [];
   let collected = 0;
+  const html = (body: string) => renderParts(body, sink, null).map((p) => (p.t === 'html' ? p.html : '')).join('');
   if (lead) {
-    week.introHtml = render(lead, sink);
+    week.introHtml = html(lead);
   }
   const lessonRe = new RegExp(`^Lekce\\s+(\\d+)\\s*(?:${DASH}|:|\\.)?\\s*(.*)$`, 'i');
   for (const b of blocks) {
     const lm = b.title.match(lessonRe);
     if (/^jak s lekcemi/i.test(b.title) || (!week.lessons.length && /^úvod/i.test(b.title))) {
       week.introTitle = b.title;
-      week.introHtml += render(b.body, sink);
+      week.introHtml += html(b.body);
     } else if (lm) {
       const ln = Number(lm[1]);
       if (week.lessons.some((l) => l.n === ln)) {
@@ -334,9 +597,9 @@ export function parseWeek(src: string, fileWeek: number, warn: (m: string) => vo
       week.lessons.push(lesson);
     } else if (/^literatura|^zdroje/i.test(b.title)) {
       week.literatureTitle = b.title;
-      week.literatureHtml += render(b.body, sink);
+      week.literatureHtml += html(b.body);
     } else {
-      week.extras.push({ title: b.title, html: render(b.body, sink) });
+      week.extras.push({ title: b.title, html: html(b.body) });
     }
   }
   week.lessons.sort((a, b) => a.n - b.n);
@@ -354,6 +617,7 @@ export const TOTAL_WEEKS = 8;
 
 export function loadCourse(dir: string, warn: (m: string) => void = console.warn): Course {
   const weeks: Week[] = [];
+  usedIds = new Map();
   if (existsSync(dir)) {
     const files = readdirSync(dir)
       .map((f) => ({ f, m: f.match(/^tyden-(\d+)\.md$/i) }))
@@ -361,7 +625,7 @@ export function loadCourse(dir: string, warn: (m: string) => void = console.warn
       .sort((a, b) => Number(a.m![1]) - Number(b.m![1]));
     for (const { f, m } of files) {
       const src = readFileSync(join(dir, f), 'utf8');
-      const week = parseWeek(src, Number(m![1]), warn);
+      const week = parseWeek(src, Number(m![1]), warn, `content/${f}`);
       if (weeks.some((w) => w.n === week.n)) {
         warn(`${f}: týden ${week.n} už existuje, soubor přeskakuji.`);
         continue;

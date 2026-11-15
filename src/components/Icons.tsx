@@ -73,3 +73,8 @@ export const IconChevron = (p: P) => (
     <path d="m9.5 5.5 6.5 6.5-6.5 6.5" />
   </S>
 );
+export const IconUp = (p: P) => (
+  <S {...p}>
+    <path d="M12 19V5.5M5.5 12 12 5.5l6.5 6.5" />
+  </S>
+);

@@ -8,12 +8,23 @@ import { course, allLessons } from './course';
 
 export type Note = { text: string; updated: string };
 
+/** Odpověď na cvičení, ukládaná pod jeho stabilním id. */
+export type ExAnswer = (
+  | { typ: 'rozrad'; picks: (string | null)[]; idx: number }
+  | { typ: 'volba'; pick: number }
+  | { typ: 'skala'; values: Record<string, number> }
+  | { typ: 'odpoved'; text: string }
+  | { typ: 'kroky'; answers: string[]; step: number; done: boolean }
+) & { updated?: string };
+
 export type State = {
   v: 1;
   /** lessonId → čas dokončení (ISO) */
   done: Record<string, string>;
-  /** id pole → odpověď */
+  /** id pole → odpověď (starší formát „Na tvoje závody“) */
   notes: Record<string, Note>;
+  /** id cvičení → odpověď */
+  ex: Record<string, ExAnswer>;
   settings: { chrome: boolean };
   /** kolik týdnů aplikace znala minule – kvůli pruhu „Přibyl nový týden“ */
   knownWeeks: number;
@@ -30,6 +41,7 @@ function fresh(): State {
     v: 1,
     done: {},
     notes: {},
+    ex: {},
     settings: { chrome: true },
     knownWeeks: course.weeks.length,
     readPos: {},
@@ -45,6 +57,7 @@ function normalize(raw: unknown): State {
     v: 1,
     done: typeof r.done === 'object' && r.done ? { ...r.done } : {},
     notes: typeof r.notes === 'object' && r.notes ? { ...r.notes } : {},
+    ex: typeof r.ex === 'object' && r.ex ? { ...r.ex } : {},
     settings: { chrome: r.settings?.chrome ?? true },
     knownWeeks: typeof r.knownWeeks === 'number' ? r.knownWeeks : base.knownWeeks,
     readPos: typeof r.readPos === 'object' && r.readPos ? { ...r.readPos } : {},
@@ -120,6 +133,17 @@ function scheduleNotify() {
   notifyTimer = window.setTimeout(() => subs.forEach((f) => f()), 400);
 }
 
+export function setEx(id: string, a: ExAnswer | null, notify = true) {
+  update((s) => {
+    const ex = { ...s.ex };
+    if (a) ex[id] = { ...a, updated: new Date().toISOString() };
+    else delete ex[id];
+    return { ...s, ex };
+  }, false);
+  if (notify) subs.forEach((f) => f());
+  else scheduleNotify();
+}
+
 export function setChrome(on: boolean) {
   update((s) => ({ ...s, settings: { ...s.settings, chrome: on } }));
 }
@@ -139,8 +163,8 @@ export function saveLast(route: string, y: number) {
 // ——— záloha ———
 
 export function exportBackup(): string {
-  const { done, notes, settings } = state;
-  return JSON.stringify({ app: 'etapa', v: 1, exported: new Date().toISOString(), done, notes, settings }, null, 2);
+  const { done, notes, ex, settings } = state;
+  return JSON.stringify({ app: 'etapa', v: 2, exported: new Date().toISOString(), done, notes, ex, settings }, null, 2);
 }
 
 export function importBackup(json: string): { ok: true } | { ok: false; error: string } {

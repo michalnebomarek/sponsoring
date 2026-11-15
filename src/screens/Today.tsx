@@ -73,8 +73,8 @@ export function Today() {
           </h2>
           <p class="today-line">
             {lesson.kind === 'task'
-              ? 'Dnes tě čeká úkol na tvoje závody. Asi 30 minut.'
-              : `Dnes tě čeká lekce ${lesson.n}. Asi 30 minut.`}
+              ? `Dnes tě čeká úkol na tvoje závody. ≈ ${lesson.minutes} min.`
+              : `Dnes tě čeká lekce ${lesson.n}. ≈ ${lesson.minutes} min.`}
           </p>
           <a class="btn btn--primary btn--big" href={href({ name: 'lesson', id: lesson.id })}>
             Začít
