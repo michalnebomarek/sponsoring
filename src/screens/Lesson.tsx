@@ -72,7 +72,8 @@ function Parts({ parts, class: cls = 'prose' }: { parts: Part[]; class?: string 
 const CHIP_LABEL: Record<string, string> = {
   vyklad: 'Výklad',
   pripady: 'Případy',
-  'primarni-zdroj': 'Primární zdroj',
+  'v-praxi': 'V praxi',
+  'primarni-zdroj': 'Zdroj',
   cviceni: 'Cvičení',
   pojmy: 'Pojmy',
 };

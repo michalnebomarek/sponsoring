@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 export type SourceLink = { href: string; text: string; domain: string };
 
-export type SectionKind = 'theory' | 'case' | 'primary' | 'exercises' | 'apply' | 'terms' | 'other';
+export type SectionKind = 'theory' | 'case' | 'practice' | 'primary' | 'exercises' | 'apply' | 'terms' | 'other';
 
 // ——— cvičení ———
 export type ExRozrad = {
@@ -348,6 +348,7 @@ export function wordCount(src: string): number {
 
 const EX_MINUTES: Record<Exercise['typ'], number> = { volba: 2, rozrad: 2, skala: 2, odpoved: 4, kroky: 10 };
 export const READING_WPM = 180;
+export const PRIMARY_SOURCE_MINUTES = 10;
 
 function renderInline(src: string, links: SourceLink[]): string {
   const tokens = md.parseInline(src, {});
@@ -383,6 +384,7 @@ function sectionKind(title: string): SectionKind {
   if (t.startsWith('teorie') || t.startsWith('výklad') || t.startsWith('vyklad')) return 'theory';
   if (t.startsWith('případ') || t.startsWith('pripad') || t.startsWith('case')) return 'case';
   if (t.startsWith('primární') || t.startsWith('primarni')) return 'primary';
+  if (t.startsWith('jak to použít') || t.startsWith('jak to pouzit') || t.startsWith('v praxi')) return 'practice';
   if (t.startsWith('cvičení') || t.startsWith('cviceni')) return 'exercises';
   if (t.startsWith('na tvoje') || t.startsWith('na tvé') || t.startsWith('na tve')) return 'apply';
   if (t.startsWith('pojmy') || t.startsWith('slovníček')) return 'terms';
@@ -458,6 +460,7 @@ function parseTask(src: string, lessonId: string, links: SourceLink[]): Lesson['
 const ANCHORS: Partial<Record<SectionKind, string>> = {
   theory: 'vyklad',
   case: 'pripady',
+  practice: 'v-praxi',
   primary: 'primarni-zdroj',
   exercises: 'cviceni',
   terms: 'pojmy',
@@ -473,7 +476,9 @@ function parseLesson(week: number, n: number, title: string, body: string): { le
   const exercises: Exercise[] = [];
   let leadParts: Part[] = [];
   let task: Lesson['task'];
-  let words = 0;
+  // Odhad času: slova ve všech textových sekcích kromě Cvičení a Pojmů (včetně
+  // úvodu lekce a podsekcí ####) / 180, +10 min za Primární zdroj, + minuty za cvičení.
+  let words = wordCount(lead);
   let extraMinutes = 0;
 
   if (!blocks.length) {
@@ -492,7 +497,8 @@ function parseLesson(week: number, n: number, title: string, body: string): { le
       const kind = sectionKind(b.title);
       const anchor = ANCHORS[kind] && !anchored.has(ANCHORS[kind]!) ? ANCHORS[kind] : undefined;
       if (anchor) anchored.add(anchor);
-      if (kind === 'theory' || kind === 'case' || kind === 'primary') words += wordCount(b.body);
+      if (kind !== 'exercises' && kind !== 'terms') words += wordCount(b.body);
+      if (kind === 'primary') extraMinutes += PRIMARY_SOURCE_MINUTES;
       if (kind === 'terms') {
         const sectionLinks: SourceLink[] = [];
         const parsed = parseTerms(b.body, id, sectionLinks);
@@ -519,7 +525,6 @@ function parseLesson(week: number, n: number, title: string, body: string): { le
     }
   }
 
-  // Odhad času: slova výkladu, případů a primárního zdroje / 180 + minuty za cvičení.
   const raw = words / READING_WPM + extraMinutes + exercises.reduce((m, e) => m + EX_MINUTES[e.typ], 0);
   const minutes = Math.max(5, Math.round(raw / 5) * 5);
 

@@ -31,7 +31,8 @@ Na kód se při tom sahat nemusí.
 Text…
 
 ### Případ 1: Název          ← jeden nebo dva případy
-### Primární zdroj (10 minut) ← volitelné
+### Jak to použít v praxi   ← štítek „V praxi“
+### Primární zdroj (10 minut) ← volitelné, štítek „Zdroj“, +10 min
 ### Cvičení
 ```cviceni
 typ: volba
@@ -47,7 +48,7 @@ otazka: …
 ## Literatura k týdnu
 ````
 
-Pod nadpisem lekce se zobrazí štítky (Výklad, Případy, Primární zdroj, Cvičení, Pojmy), ale jen pro sekce, které lekce má. Starý formát (`### Teorie`, `### Na tvoje závody`) funguje dál.
+Pod nadpisem lekce se zobrazí štítky (Výklad, Případy, V praxi, Zdroj, Cvičení, Pojmy), ale jen pro sekce, které lekce má. Starý formát (`### Teorie`, `### Na tvoje závody`) funguje dál.
 
 ### Cvičení
 
@@ -72,7 +73,7 @@ Pravidla:
 
 ### Odhad času
 
-Aplikace ho počítá sama: slova ve Výkladu, Případech a Primárním zdroji děleno 180, plus 2 minuty za každé cvičení `volba`, `rozrad` a `skala`, 4 minuty za `odpoved` a 10 minut za `kroky`. Výsledek se zaokrouhlí na 5 minut.
+Aplikace ho počítá sama: slova ve všech textových sekcích lekce kromě Cvičení a Pojmů děleno 180. Patří sem i úvod lekce, „Jak to použít v praxi“ a podsekce `####` (např. „Hlavní studie lekce“, „Vzorová karta“). K tomu se přičte 10 minut za sekci „Primární zdroj“, 2 minuty za každé cvičení `volba`, `rozrad` a `skala`, 4 minuty za `odpoved` a 10 minut za `kroky`. Výsledek se zaokrouhlí na 5 minut. Rozpis pro každou lekci vypíše `node scripts/inspect.ts`.
 
 ### Další pravidla
 
